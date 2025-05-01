@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.log
+*.pot
+*.mo
+
+# Env files
+.env
+.env.*
+
+# Django
+db.sqlite3
+media/
+staticfiles/
+*.sqlite3
+*.db
+
+# VS Code / PyCharm
+.vscode/
+.idea/
+
+# Byte-compiled / virtualenvs
+*.egg-info/
+.eggs/
+.env/
+.venv/
+venv/
+env/
+ENV/
+
+# Migrations (optional — keep them if needed for version control)
+**/migrations/__pycache__/
+# **/migrations/  <-- Uncomment if you don't want to track any migrations
+
+# Node (if you have JS tools)
+node_modules/
+
+# Docker
+*.pid
+*.log
+docker-compose.override.yml
+__pycache__/
+*.bak
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage reports
+htmlcov/
+.coverage
+coverage.xml
+.cache
+
+# Testing
+test_results/
+.nox/
+.pytest_cache/
+
+# GitHub Actions artifacts
+.github/workflows/*.log
