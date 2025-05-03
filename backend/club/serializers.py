@@ -1,17 +1,7 @@
 from rest_framework import serializers
-from .models import Event, Member, News
+from .models import Department, Member, Class, Officer, Program, Organization, Event
 
-class EventSerializer(serializers.ModelSerializer):
+class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Event
-        fields = '__all__'
-
-class MemberSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Member
-        fields = '__all__'
-
-class NewsSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = News
+        model = Department
         fields = '__all__'

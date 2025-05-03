@@ -11,7 +11,7 @@ const EventsPage = () => {
   // Fetch events when the component mounts
   useEffect(() => {
     // Define the API URL
-    const apiUrl = 'http://127.0.0.1:8000/api/events/';
+    const apiUrl = 'http://127.0.0.1:8000/api/departments/';
 
     // Use Axios to make the API call
     axios.get(apiUrl)
@@ -26,7 +26,7 @@ const EventsPage = () => {
 
   return (
     <div>
-      <h1>Upcoming Events</h1>
+      <h1>Department List</h1>
       
       {error && <p>{error}</p>}  {/* Display error if it occurs */}
       
@@ -36,10 +36,9 @@ const EventsPage = () => {
         <ul>
           {events.map(event => (
             <li key={event.id}>
-              <h2>{event.title}</h2>
+              <h2>{event.name}</h2>
               <p>{event.description}</p>
-              <p>{event.date}</p>
-              <p>{event.location}</p>
+              <p>{event.initials}</p>
             </li>
           ))}
         </ul>

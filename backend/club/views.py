@@ -1,10 +1,10 @@
 from django.http import JsonResponse, HttpResponse
 from django.shortcuts import render
-from .models import Event
 from django.utils import timezone
 from django.contrib.auth.models import User
+from .models import Department, Log_Record, Account, Program, Year, Section, Organization, Activity
 
-def insert_event(request):
+def insert_department(request):
     # Try to fetch the user, and create it if it doesn't exist
     user, created = User.objects.get_or_create(username='admin', defaults={'password': 'password123'})
     
@@ -14,31 +14,28 @@ def insert_event(request):
         user.save()
 
     # Create and save the new event
-    new_event = Event.objects.create(
-        name="Club Orientation",
-        description="Introductory meeting for new members",
-        date=timezone.datetime(2025, 5, 10, 10, 0),
-        location="Main Hall",
-        created_by=user
+    new_department = Department.objects.create(
+        name="Computer Science",
+        description="Department of Computer Science",
+        initials="CS"
     )
 
-    return HttpResponse(f"New Event created: {new_event.name}")
+    return HttpResponse(f"New Event created: {new_department.name}")
 
-def events_list(request):
+def departments_list(request):
     # Fetch all events from the database
-    events = Event.objects.all()
+    departments = Department.objects.all()
     
     # Serialize events into a list of dictionaries
-    events_data = []
-    for event in events:
-        events_data.append({
-            "id": event.id,
-            "name": event.name,
-            "description": event.description,
-            "date": event.date.strftime('%Y-%m-%d %H:%M:%S'),
-            "location": event.location,
-            "created_by": event.created_by.username
-        })
-    
+    departments_data = []
+    for department in departments:
+        department_info = {
+            'id': department.id,
+            'name': department.name,
+            'description': department.description,
+            'initials': department.initials
+        }
+        departments_data.append(department_info)
+
     # Return the events data as JSON
-    return JsonResponse(events_data, safe=False)
+    return JsonResponse(departments_data, safe=False)

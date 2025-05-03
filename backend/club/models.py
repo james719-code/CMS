@@ -6,105 +6,144 @@ class Department(models.Model):
     name = models.CharField(max_length=100)
     initials = models.CharField(max_length=15)
     description = models.TextField()
-    created_at = models.DateTimeField(default=timezone.now)
 
     def __str__(self):
         return self.name
 
+
+class Log_Record(models.Model):
+    id = models.AutoField(primary_key=True)
+    action = models.CharField(max_length=100)
+    timestamp = models.DateTimeField(default=timezone.now)
+
+    def __str__(self):
+        return f"{self.action} - {self.timestamp}"
+
+class Account(models.Model):
+    id = models.AutoField(primary_key=True)
+    username = models.CharField(max_length=100, unique=True)
+    password = models.CharField(max_length=100)
+    name = models.CharField(max_length=100)
+    birthday = models.DateField(default=timezone.now)
+    gender = models.CharField(max_length=10, choices=[('M', 'M'),('F','F')], default='M')
+    email = models.EmailField(unique=True)
+
+    def __str__(self):
+        return self.username
 
 class Program(models.Model):
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=100)
-    initials = models.CharField(max_length=15)
     description = models.TextField()
-    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name='programs', null=True, blank=True)
-    created_at = models.DateTimeField(default=timezone.now)
+    department = models.ForeignKey(Department, on_delete=models.CASCADE)
 
     def __str__(self):
         return self.name
 
-
-class Account(models.Model):
-    ACCOUNT_TYPES = [
-        ('admin', 'Admin'),
-        ('officer', 'Officer'),
-        ('member', 'Member'),
-    ]
+class Year(models.Model):
     id = models.AutoField(primary_key=True)
-    account = models.CharField(max_length=100)
-    password = models.CharField(max_length=100)
-    email = models.EmailField(unique=True)
-    account_type = models.CharField(max_length=50, choices=ACCOUNT_TYPES)
+    year = models.IntegerField()
+    program = models.ForeignKey(Program, on_delete=models.CASCADE)
 
     def __str__(self):
-        return self.account
+        return str(self.year)
 
-
-class Class(models.Model):
+class Section(models.Model):
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=100)
-    description = models.TextField()
-    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name='classes', null=True, blank=True)
-    program = models.ForeignKey(Program, on_delete=models.CASCADE, related_name='classes', null=True, blank=True)
-    section = models.CharField(max_length=10)
-    year = models.IntegerField()
-    created_at = models.DateTimeField(default=timezone.now)
+    year = models.ForeignKey(Year, on_delete=models.CASCADE)
 
     def __str__(self):
-        return f"{self.name} - {self.section}"
-
-
-class Officer(models.Model):
-    id = models.AutoField(primary_key=True)
-    user = models.OneToOneField(Account, on_delete=models.CASCADE, related_name='officer_profile', null=True, blank=True)
-    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name='officers', null=True, blank=True)
-    program = models.ForeignKey(Program, on_delete=models.CASCADE, related_name='officers', null=True, blank=True)
-    position = models.CharField(max_length=100)
-    class_include = models.OneToOneField(Class, on_delete=models.SET_NULL, blank=True, null=True, related_name='officer')
-
-    def __str__(self):
-        return self.user.account if self.user else "Unassigned Officer"
-
-
-class Member(models.Model):
-    id = models.AutoField(primary_key=True)
-    user = models.OneToOneField(Account, on_delete=models.CASCADE, related_name='member_profile', null=True, blank=True)
-    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name='members', null=True, blank=True)
-    program = models.ForeignKey(Program, on_delete=models.CASCADE, related_name='members', null=True, blank=True)
-
-    def __str__(self):
-        return self.user.account if self.user else "Unassigned Member"
-
-
-class Admin(models.Model):
-    id = models.AutoField(primary_key=True)
-    user = models.OneToOneField(Account, on_delete=models.CASCADE, related_name='admin_profile', null=True, blank=True)
-    work = models.CharField(max_length=100)
-
-    def __str__(self):
-        return self.user.account if self.user else "Unassigned Admin"
-
+        return self.name
 
 class Organization(models.Model):
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=100)
     description = models.TextField()
-    department = models.ForeignKey(Department, on_delete=models.CASCADE, related_name='organizations', null=True, blank=True)
-    program = models.ForeignKey(Program, on_delete=models.CASCADE, related_name='organizations', null=True, blank=True)
-    created_at = models.DateTimeField(default=timezone.now)
+    program = models.ForeignKey(Program, on_delete=models.CASCADE)
 
     def __str__(self):
         return self.name
 
+class Admin(models.Model):
+    id = models.AutoField(primary_key=True)
+    account = models.ForeignKey(Account, on_delete=models.CASCADE)
+    work = models.CharField(max_length=100)
 
-class Event(models.Model):
+    def __str__(self):
+        return f"Admin: {self.account.username}"
+
+class Member(models.Model):
+    id = models.AutoField(primary_key=True)
+    account = models.ForeignKey(Account, on_delete=models.CASCADE)
+    section = models.ForeignKey(Section, on_delete=models.CASCADE)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+
+    def __str__(self):
+        return f"Member: {self.account.username} in {self.organization.name}"
+
+class Officer(models.Model):
+    id = models.AutoField(primary_key=True)
+    account = models.ForeignKey(Account, on_delete=models.CASCADE)
+    section = models.ForeignKey(Section, on_delete=models.CASCADE)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+    position = models.CharField(max_length=100)
+
+    def __str__(self):
+        return f"Officer: {self.account.username} in {self.organization.name} as {self.position}"
+
+class Activity(models.Model):
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=100)
     description = models.TextField()
-    date = models.DateTimeField()
-    location = models.CharField(max_length=200)
-    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='events', null=True, blank=True)
-    created_at = models.DateTimeField(default=timezone.now)
+    date = models.DateTimeField(default=timezone.now)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
+
+    def __str__(self):
+        return self.name
+
+class Item(models.Model):
+    id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=100)
+    description = models.TextField()
+    quantity = models.TextField()
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    activity = models.ForeignKey(Activity, on_delete=models.CASCADE)
+
+    def __str__(self):
+        return self.name
+
+class Merchandise(models.Model):
+    id = models.AutoField(primary_key=True)
+    member = models.ForeignKey(Member, on_delete=models.CASCADE)
+    item = models.ForeignKey(Item, on_delete=models.CASCADE)
+
+    def __str__(self):
+        return self.name
+
+class Ingredient(models.Model):
+    id = models.AutoField(primary_key=True)
+    officer = models.ForeignKey(Officer, on_delete=models.CASCADE)
+    item = models.ForeignKey(Item, on_delete=models.CASCADE)
+
+    def __str__(self):
+        return self.name
+
+class Attendance(models.Model):
+    id = models.AutoField(primary_key=True)
+    member = models.ForeignKey(Member, on_delete=models.CASCADE)
+    activity = models.ForeignKey(Activity, on_delete=models.CASCADE)
+    status = models.CharField(max_length=10, choices=[('Present', 'Present'), ('Absent', 'Absent')], default='Present')
+
+    def __str__(self):
+        return f"Attendance: {self.member.account.username} for {self.activity.name}"
+
+class File(models.Model):
+    id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=100)
+    description = models.TextField()
+    file_path = models.CharField(max_length=255)
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE)
 
     def __str__(self):
         return self.name
