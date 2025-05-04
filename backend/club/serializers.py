@@ -1,7 +1,29 @@
+# serializers.py
 from rest_framework import serializers
-from .models import Department, Member, Class, Officer, Program, Organization, Event
+from .models import Account, Admin, Department
+
+class AccountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Account
+        fields = ['id', 'username', 'email', 'password', 'name', 'birthday', 'gender']
+        extra_kwargs = {
+            'password': {'write_only': True}
+        }
+
+class AdminSerializer(serializers.ModelSerializer):
+    account = AccountSerializer()
+
+    class Meta:
+        model = Admin
+        fields = ['id', 'account', 'work']
+
+    def create(self, validated_data):
+        account_data = validated_data.pop('account')
+        account = Account.objects.create(**account_data)
+        admin = Admin.objects.create(account=account, **validated_data)
+        return admin
 
 class DepartmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Department
-        fields = '__all__'
+        fields = ['id', 'name', 'description', 'initials']
