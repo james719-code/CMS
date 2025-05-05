@@ -1,11 +1,16 @@
 # views/department.py
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework import status
 from ..models import Department
 from ..serializers import DepartmentSerializer
+from ..decorators import admin_required
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@admin_required
 def insert_department(request):
     serializer = DepartmentSerializer(data=request.data)
     if serializer.is_valid():
@@ -20,6 +25,8 @@ def get_department(request):
     return Response(serializer.data)
 
 @api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+@admin_required
 def update_department(request, department_id):
     try:
         department = Department.objects.get(pk=department_id)
@@ -33,6 +40,8 @@ def update_department(request, department_id):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+@admin_required
 def delete_department(request, department_id):
     try:
         department = Department.objects.get(pk=department_id)

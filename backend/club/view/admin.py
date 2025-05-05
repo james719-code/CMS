@@ -4,8 +4,14 @@ from rest_framework.response import Response
 from rest_framework import status
 from ..serializers import AdminSerializer
 from ..models import Admin
+from ..decorators import admin_required
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.decorators import permission_classes
+from ..models import Account
 
 @api_view(['POST'])
+@permission_classes([IsAuthenticated])
+@admin_required
 def insert_admin(request):
     serializer = AdminSerializer(data=request.data)
     if serializer.is_valid():
@@ -20,6 +26,8 @@ def get_admin(request):
     return Response(serializer.data)
 
 @api_view(['PUT'])
+@permission_classes([IsAuthenticated])
+@admin_required
 def update_admin(request, admin_id):
     try:
         admin = Admin.objects.get(id=admin_id)
@@ -34,6 +42,8 @@ def update_admin(request, admin_id):
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 @api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+@admin_required
 def delete_admin(request, admin_id):
     try:
         admin = Admin.objects.get(id=admin_id)
