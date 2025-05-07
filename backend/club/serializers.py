@@ -1,6 +1,6 @@
 # serializers.py
 from rest_framework import serializers
-from .models import Account, Admin, Department, Program
+from .models import Account, Admin, Department, Program, Year
 
 class AccountSerializer(serializers.ModelSerializer):
     class Meta:
@@ -35,3 +35,10 @@ class ProgramSerializer(serializers.ModelSerializer):
     class Meta:
         model = Program
         fields = ['id', 'name', 'description', 'department', 'department_details']
+
+class YearSerializer(serializers.ModelSerializer):
+    program = serializers.PrimaryKeyRelatedField(queryset=Program.objects.all())
+
+    class Meta:
+        model = Year
+        fields = ['id', 'year', 'program']
