@@ -4,6 +4,7 @@ from .view.admin import insert_admin, get_admin, update_admin, delete_admin
 from .view.department import insert_department, get_department, update_department, delete_department
 from .view.program import insert_program, get_programs, update_program, delete_program
 from .view.year import insert_year, get_years, update_year, delete_year
+from .view.section import insert_section, get_sections, update_section, delete_section
 
 urlpatterns = [
     path('admin/login/', admin_login, name='admin_login'),
@@ -23,4 +24,8 @@ urlpatterns = [
     path('year/get/', get_years, name='get_years'),
     path('year/update/<int:year_id>/', update_year, name='update_year'),
     path('year/delete/<int:year_id>/', delete_year, name='delete_year'),
+    path('section/insert/', insert_section, name='insert_section'),
+    path('section/get/', get_sections, name='get_sections'),
+    path('section/update/<int:section_id>/', update_section, name='update_section'),
+    path('section/delete/<int:section_id>/', delete_section, name='delete_section'),
 ]
