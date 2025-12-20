@@ -1,23 +1,35 @@
-import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
-import DepartmentsPage from './pages/DepartmentsPage';
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider } from './context/AuthContext';
+import Layout from './components/Layout';
+import PrivateRoute from './components/PrivateRoute';
+import LoginPage from './pages/LoginPage';
+import RegisterPage from './pages/RegisterPage';
+import AdminDashboard from './pages/AdminDashboard';
+import UserDashboard from './pages/UserDashboard';
+import OrganizationDetail from './pages/OrganizationDetail';
+import AttendanceManager from './pages/AttendanceManager';
 import './App.css';
 
 function App() {
   return (
     <Router>
-      <div className="App">
-        <header className="App-header">
-          <h1>University Club Management System</h1>
-        </header>
-        <main>
+      <AuthProvider>
+        <Layout>
           <Routes>
-            <Route path="/" element={<DepartmentsPage />} />
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
+            
+            <Route element={<PrivateRoute />}>
+                <Route path="/" element={<Navigate to="/dashboard" />} />
+                <Route path="/dashboard" element={<UserDashboard />} />
+                <Route path="/admin-dashboard" element={<AdminDashboard />} />
+                <Route path="/organizations/:id" element={<OrganizationDetail />} />
+                <Route path="/attendance/:activityId" element={<AttendanceManager />} />
+            </Route>
           </Routes>
-        </main>
-        <footer className="App-footer">
-          <p>&copy; 2024 University CMS. All rights reserved.</p>
-        </footer>
-      </div>
+        </Layout>
+      </AuthProvider>
     </Router>
   );
 }

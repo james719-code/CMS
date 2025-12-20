@@ -1,11 +1,13 @@
 from django.test import TestCase
 from rest_framework.test import APIClient
 from rest_framework import status
-from .models import Department, Program, Year, Section, Organization, Item, Activity
+from .models import Department, Program, Year, Section, Organization, Item, Activity, Account
 
 class DepartmentTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        self.user = Account.objects.create_user(username='testuser', email='test@test.com', password='password')
+        self.client.force_authenticate(user=self.user)
         self.department_data = {'name': 'Computer Science', 'initials': 'CS', 'description': 'CS Dept'}
         self.department = Department.objects.create(**self.department_data)
 
