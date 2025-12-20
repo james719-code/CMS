@@ -1,6 +1,26 @@
-from django.http import JsonResponse, HttpResponse
-from django.shortcuts import render
-from django.utils import timezone
-from django.contrib.auth.models import User
-from .view.department import insert_department, get_department, update_department, delete_department
-from .view.admin import insert_admin, get_admin, update_admin
+from rest_framework import viewsets
+from .models import Department, Program, Year, Section, Organization
+from .serializers import (
+    DepartmentSerializer, ProgramSerializer, YearSerializer, 
+    SectionSerializer, OrganizationSerializer
+)
+
+class DepartmentViewSet(viewsets.ModelViewSet):
+    queryset = Department.objects.all()
+    serializer_class = DepartmentSerializer
+
+class ProgramViewSet(viewsets.ModelViewSet):
+    queryset = Program.objects.all()
+    serializer_class = ProgramSerializer
+
+class YearViewSet(viewsets.ModelViewSet):
+    queryset = Year.objects.all()
+    serializer_class = YearSerializer
+
+class SectionViewSet(viewsets.ModelViewSet):
+    queryset = Section.objects.all()
+    serializer_class = SectionSerializer
+
+class OrganizationViewSet(viewsets.ModelViewSet):
+    queryset = Organization.objects.all()
+    serializer_class = OrganizationSerializer
