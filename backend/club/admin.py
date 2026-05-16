@@ -3,8 +3,9 @@ from django.contrib.auth.admin import UserAdmin
 
 from .models import (
     Account, ActivityCategory, Announcement, Attendance, Budget, BudgetCategory,
-    Department, Document, DocumentCategory, Event, Membership, MembershipRequest,
-    Organization, Program
+    Department, Document, DocumentCategory, Event, EventRegistration,
+    Fee, FeeAssignment, Membership, MembershipRequest, Notification,
+    Organization, Payment, Program
 )
 
 
@@ -84,11 +85,25 @@ class AttendanceAdmin(admin.ModelAdmin):
     search_fields = ('event__title', 'user__email', 'user__first_name', 'user__last_name')
 
 
+@admin.register(EventRegistration)
+class EventRegistrationAdmin(admin.ModelAdmin):
+    list_display = ('event', 'user', 'status', 'registered_at', 'cancelled_at')
+    list_filter = ('status', 'event__organization', 'registered_at')
+    search_fields = ('event__title', 'user__email', 'user__first_name', 'user__last_name')
+
+
 @admin.register(Announcement)
 class AnnouncementAdmin(admin.ModelAdmin):
     list_display = ('title', 'organization', 'author', 'is_pinned', 'is_published', 'created_at')
     list_filter = ('organization', 'is_pinned', 'is_published', 'created_at')
     search_fields = ('title', 'content', 'author__email')
+
+
+@admin.register(Notification)
+class NotificationAdmin(admin.ModelAdmin):
+    list_display = ('recipient', 'organization', 'notification_type', 'title', 'is_read', 'created_at')
+    list_filter = ('notification_type', 'is_read', 'organization', 'created_at')
+    search_fields = ('recipient__email', 'title', 'message')
 
 
 @admin.register(BudgetCategory)
@@ -103,6 +118,27 @@ class BudgetAdmin(admin.ModelAdmin):
     list_display = ('organization', 'transaction_type', 'category', 'amount', 'date', 'created_by')
     list_filter = ('organization', 'transaction_type', 'category', 'date')
     search_fields = ('organization__name', 'description', 'created_by__email')
+
+
+@admin.register(Fee)
+class FeeAdmin(admin.ModelAdmin):
+    list_display = ('title', 'organization', 'fee_type', 'amount', 'due_date', 'status', 'created_by')
+    list_filter = ('organization', 'fee_type', 'status', 'due_date')
+    search_fields = ('title', 'description', 'organization__name', 'created_by__email')
+
+
+@admin.register(FeeAssignment)
+class FeeAssignmentAdmin(admin.ModelAdmin):
+    list_display = ('fee', 'user', 'amount_due', 'amount_paid', 'status', 'due_date')
+    list_filter = ('status', 'fee__organization', 'due_date')
+    search_fields = ('fee__title', 'user__email', 'user__first_name', 'user__last_name')
+
+
+@admin.register(Payment)
+class PaymentAdmin(admin.ModelAdmin):
+    list_display = ('assignment', 'amount', 'payment_method', 'reference_number', 'paid_at', 'received_by')
+    list_filter = ('payment_method', 'paid_at', 'assignment__fee__organization')
+    search_fields = ('assignment__fee__title', 'assignment__user__email', 'reference_number')
 
 
 @admin.register(DocumentCategory)

@@ -7,7 +7,10 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from .models import Department, Event, Membership, MembershipRequest, Organization, Program
+from .models import (
+    Department, Event, EventRegistration, Fee, FeeAssignment, Membership,
+    MembershipRequest, Notification, Organization, Payment, Program
+)
 
 
 User = get_user_model()
@@ -117,6 +120,82 @@ class BackendSecurityTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('count', response.data)
         self.assertIn('results', response.data)
+
+    def test_event_registration_waitlists_when_capacity_is_full(self):
+        Membership.objects.create(
+            user=self.student,
+            organization=self.organization,
+            role='member',
+        )
+        Membership.objects.create(
+            user=self.other,
+            organization=self.organization,
+            role='member',
+        )
+        event = Event.objects.create(
+            organization=self.organization,
+            title='Limited Workshop',
+            venue='Lab 1',
+            start_time=timezone.now() + timedelta(days=1),
+            end_time=timezone.now() + timedelta(days=1, hours=2),
+            max_attendees=1,
+        )
+
+        self.client.force_authenticate(self.student)
+        first_response = self.client.post(f'/api/events/{event.id}/register/', {}, format='json')
+
+        self.client.force_authenticate(self.other)
+        second_response = self.client.post(f'/api/events/{event.id}/register/', {}, format='json')
+
+        self.assertEqual(first_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(EventRegistration.objects.get(event=event, user=self.student).status, 'registered')
+        self.assertEqual(EventRegistration.objects.get(event=event, user=self.other).status, 'waitlisted')
+
+    def test_fee_assignment_payment_and_summary_flow(self):
+        Membership.objects.create(
+            user=self.student,
+            organization=self.organization,
+            role='member',
+        )
+        Membership.objects.create(
+            user=self.other,
+            organization=self.organization,
+            role='member',
+        )
+        self.client.force_authenticate(self.leader)
+        fee_response = self.client.post('/api/fees/', {
+            'organization': self.organization.id,
+            'title': 'Annual Due',
+            'fee_type': 'membership_due',
+            'amount': '100.00',
+            'status': 'open',
+        }, format='json')
+
+        self.assertEqual(fee_response.status_code, status.HTTP_201_CREATED)
+        fee = Fee.objects.get(id=fee_response.data['id'])
+
+        assign_response = self.client.post(f'/api/fees/{fee.id}/assign_members/', {}, format='json')
+        self.assertEqual(assign_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(FeeAssignment.objects.filter(fee=fee).count(), 3)
+
+        assignment = FeeAssignment.objects.get(fee=fee, user=self.student)
+        payment_response = self.client.post('/api/payments/', {
+            'assignment': assignment.id,
+            'amount': '100.00',
+            'payment_method': 'cash',
+        }, format='json')
+
+        self.assertEqual(payment_response.status_code, status.HTTP_201_CREATED)
+        assignment.refresh_from_db()
+        self.assertEqual(assignment.status, 'paid')
+        self.assertEqual(Payment.objects.filter(assignment=assignment).count(), 1)
+        self.assertTrue(Notification.objects.filter(recipient=self.student, notification_type='payment').exists())
+
+        summary_response = self.client.get(f'/api/fees/summary/?organization={self.organization.id}')
+        self.assertEqual(summary_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(str(summary_response.data['total_due']), '300.00')
+        self.assertEqual(str(summary_response.data['total_paid']), '100.00')
 
 
 class OrganizationConstraintTest(TestCase):

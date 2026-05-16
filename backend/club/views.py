@@ -13,7 +13,8 @@ from .models import (
     Account, Department, Program, Organization,
     Membership, MembershipRequest, Event, Attendance,
     Announcement, Budget, BudgetCategory, Document, DocumentCategory,
-    ActivityCategory
+    ActivityCategory, EventRegistration, Fee, FeeAssignment, Payment,
+    Notification
 )
 from .serializers import (
     AccountSerializer, SimpleAccountSerializer, DepartmentSerializer, ProgramSerializer,
@@ -22,13 +23,45 @@ from .serializers import (
     EventSerializer, EventListSerializer, AttendanceSerializer, ActivityCategorySerializer,
     AnnouncementSerializer, BudgetSerializer, BudgetCategorySerializer, BudgetSummarySerializer,
     DocumentSerializer, DocumentCategorySerializer,
-    AdminDashboardStatsSerializer, OfficerDashboardStatsSerializer
+    AdminDashboardStatsSerializer, OfficerDashboardStatsSerializer,
+    EventRegistrationSerializer, FeeSerializer, FeeAssignmentSerializer,
+    PaymentSerializer, PaymentSummarySerializer, NotificationSerializer,
+    OrganizationReportSerializer
 )
 from .permissions import (
     IsAdmin, IsLeader, IsOfficer, IsLeaderOrOfficer, 
     IsOfficerOrReadOnly, IsMember, IsOwnerOrAdmin,
     is_org_officer_or_leader, is_org_member
 )
+
+
+def user_officer_org_ids(user):
+    org_ids = list(Membership.objects.filter(
+        user=user,
+        role='officer',
+        is_active=True,
+    ).values_list('organization_id', flat=True))
+
+    led_org_id = getattr(getattr(user, 'led_organization', None), 'id', None)
+    if led_org_id:
+        org_ids.append(led_org_id)
+    return list(set(org_ids))
+
+
+def notify_users(users, title, message='', notification_type='system', organization=None, link=''):
+    notifications = [
+        Notification(
+            recipient=user,
+            organization=organization,
+            notification_type=notification_type,
+            title=title,
+            message=message,
+            link=link,
+        )
+        for user in users
+    ]
+    if notifications:
+        Notification.objects.bulk_create(notifications)
 
 # --- Authentication Views ---
 
@@ -201,6 +234,7 @@ class OrganizationViewSet(viewsets.ModelViewSet):
         org.reviewed_at = timezone.now()
         org.status_note = request.data.get('note', '')
         org.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'status_note', 'updated_at'])
+        notify_users([org.leader], f"{org.name} approved", org.status_note, notification_type='membership', organization=org, link=f"/organizations/{org.id}")
         return Response({'status': 'organization approved', 'organization': OrganizationSerializer(org).data})
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
@@ -211,6 +245,7 @@ class OrganizationViewSet(viewsets.ModelViewSet):
         org.reviewed_at = timezone.now()
         org.status_note = request.data.get('reason', '')
         org.save(update_fields=['status', 'reviewed_by', 'reviewed_at', 'status_note', 'updated_at'])
+        notify_users([org.leader], f"{org.name} rejected", org.status_note, notification_type='membership', organization=org, link=f"/organizations/{org.id}")
         return Response({'status': 'organization rejected'})
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdmin])
@@ -396,6 +431,13 @@ class MembershipRequestViewSet(viewsets.ModelViewSet):
         membership_request.reviewed_by = request.user
         membership_request.reviewed_at = timezone.now()
         membership_request.save()
+        notify_users(
+            [membership_request.user],
+            f"Membership approved for {org.acronym}",
+            notification_type='membership',
+            organization=org,
+            link=f"/organizations/{org.id}",
+        )
         
         return Response({'status': 'request approved', 'request': MembershipRequestSerializer(membership_request).data})
 
@@ -415,6 +457,14 @@ class MembershipRequestViewSet(viewsets.ModelViewSet):
         membership_request.reviewed_at = timezone.now()
         membership_request.rejection_reason = request.data.get('reason', '')
         membership_request.save()
+        notify_users(
+            [membership_request.user],
+            f"Membership rejected for {org.acronym}",
+            membership_request.rejection_reason,
+            notification_type='membership',
+            organization=org,
+            link=f"/organizations/{org.id}",
+        )
         
         return Response({'status': 'request rejected'})
 
@@ -496,7 +546,133 @@ class EventViewSet(viewsets.ModelViewSet):
             return self.get_paginated_response(serializer.data)
         return Response(EventListSerializer(events, many=True).data)
 
+    @action(detail=True, methods=['post'])
+    def register(self, request, pk=None):
+        event = self.get_object()
+        registration_user_id = request.data.get('user', request.user.id)
+
+        try:
+            registration_user = Account.objects.get(id=registration_user_id)
+        except Account.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if registration_user != request.user and not is_org_officer_or_leader(request.user, event.organization):
+            return Response({'error': 'Only officers can register other users'}, status=status.HTTP_403_FORBIDDEN)
+        if event.end_time < timezone.now():
+            return Response({'error': 'Registration is closed for past events'}, status=status.HTTP_400_BAD_REQUEST)
+        if event.registration_deadline and event.registration_deadline < timezone.now():
+            return Response({'error': 'Registration deadline has passed'}, status=status.HTTP_400_BAD_REQUEST)
+        if not event.is_open_for_non_members and not is_org_member(registration_user, event.organization):
+            return Response({'error': 'Only members can register for this event'}, status=status.HTTP_403_FORBIDDEN)
+
+        registration, created = EventRegistration.objects.get_or_create(
+            event=event,
+            user=registration_user,
+            defaults={
+                'status': 'waitlisted' if event.is_registration_full else 'registered',
+                'notes': request.data.get('notes', ''),
+            }
+        )
+        if not created and registration.status == 'cancelled':
+            registration.status = 'waitlisted' if event.is_registration_full else 'registered'
+            registration.cancelled_at = None
+            registration.notes = request.data.get('notes', registration.notes)
+            registration.save(update_fields=['status', 'cancelled_at', 'notes', 'updated_at'])
+        elif not created:
+            return Response({'error': 'Already registered for this event'}, status=status.HTTP_400_BAD_REQUEST)
+
+        notify_users(
+            [registration_user],
+            f"Registered for {event.title}" if registration.status == 'registered' else f"Waitlisted for {event.title}",
+            notification_type='event',
+            organization=event.organization,
+            link=f"/events/{event.id}",
+        )
+        return Response(EventRegistrationSerializer(registration).data, status=status.HTTP_201_CREATED)
+
 # --- Attendance ViewSet ---
+
+class EventRegistrationViewSet(viewsets.ModelViewSet):
+    queryset = EventRegistration.objects.select_related('event', 'event__organization', 'user')
+    serializer_class = EventRegistrationSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['event', 'user', 'status']
+    ordering_fields = ['registered_at', 'updated_at']
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return self.queryset.all()
+
+        officer_orgs = user_officer_org_ids(user)
+        return self.queryset.filter(
+            Q(event__organization_id__in=officer_orgs) | Q(user=user)
+        )
+
+    def perform_create(self, serializer):
+        event = serializer.validated_data['event']
+        registration_user = serializer.validated_data.get('user', self.request.user)
+
+        if registration_user != self.request.user and not is_org_officer_or_leader(self.request.user, event.organization):
+            raise PermissionDenied("Only officers can register other users.")
+        registration_status = 'waitlisted' if event.is_registration_full else 'registered'
+        registration = serializer.save(user=registration_user, status=registration_status)
+        notify_users(
+            [registration_user],
+            f"Registered for {event.title}" if registration.status == 'registered' else f"Waitlisted for {event.title}",
+            notification_type='event',
+            organization=event.organization,
+            link=f"/events/{event.id}",
+        )
+
+    def perform_update(self, serializer):
+        registration = self.get_object()
+        if registration.user != self.request.user and not is_org_officer_or_leader(self.request.user, registration.event.organization):
+            raise PermissionDenied("Only officers can update registrations for other users.")
+        if 'event' in serializer.validated_data or 'user' in serializer.validated_data:
+            raise ValidationError("Registration event and user cannot be changed.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if not self.request.user.is_staff and instance.user != self.request.user and not is_org_officer_or_leader(self.request.user, instance.event.organization):
+            raise PermissionDenied("Only the registrant or organization officers can delete this registration.")
+        instance.delete()
+
+    @action(detail=True, methods=['post'])
+    def cancel(self, request, pk=None):
+        registration = self.get_object()
+        if registration.user != request.user and not is_org_officer_or_leader(request.user, registration.event.organization):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        if registration.status == 'cancelled':
+            return Response({'error': 'Registration already cancelled'}, status=status.HTTP_400_BAD_REQUEST)
+
+        registration.status = 'cancelled'
+        registration.cancelled_at = timezone.now()
+        registration.save(update_fields=['status', 'cancelled_at', 'updated_at'])
+        return Response(EventRegistrationSerializer(registration).data)
+
+    @action(detail=True, methods=['post'])
+    def approve_waitlist(self, request, pk=None):
+        registration = self.get_object()
+        if not is_org_officer_or_leader(request.user, registration.event.organization):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        if registration.status != 'waitlisted':
+            return Response({'error': 'Only waitlisted registrations can be approved'}, status=status.HTTP_400_BAD_REQUEST)
+        if registration.event.is_registration_full:
+            return Response({'error': 'Event registration is already full'}, status=status.HTTP_400_BAD_REQUEST)
+
+        registration.status = 'registered'
+        registration.cancelled_at = None
+        registration.save(update_fields=['status', 'cancelled_at', 'updated_at'])
+        notify_users(
+            [registration.user],
+            f"Waitlist approved for {registration.event.title}",
+            notification_type='event',
+            organization=registration.event.organization,
+            link=f"/events/{registration.event.id}",
+        )
+        return Response(EventRegistrationSerializer(registration).data)
 
 class AttendanceViewSet(viewsets.ModelViewSet):
     queryset = Attendance.objects.select_related('event', 'event__organization', 'user', 'checked_in_by')
@@ -650,7 +826,26 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
         if org and not is_org_officer_or_leader(self.request.user, org):
             raise PermissionDenied("Only officers can create announcements.")
         
-        serializer.save(author=self.request.user)
+        announcement = serializer.save(author=self.request.user)
+        if announcement.organization:
+            recipients = Account.objects.filter(
+                memberships__organization=announcement.organization,
+                memberships__is_active=True,
+            ).distinct()
+            notify_users(
+                recipients,
+                announcement.title,
+                notification_type='announcement',
+                organization=announcement.organization,
+                link=f"/announcements/{announcement.id}",
+            )
+        else:
+            notify_users(
+                Account.objects.filter(is_active=True),
+                announcement.title,
+                notification_type='announcement',
+                link=f"/announcements/{announcement.id}",
+            )
 
     def perform_update(self, serializer):
         announcement = self.get_object()
@@ -698,6 +893,57 @@ class AnnouncementViewSet(viewsets.ModelViewSet):
         announcement.is_pinned = False
         announcement.save()
         return Response(AnnouncementSerializer(announcement).data)
+
+class NotificationViewSet(viewsets.ModelViewSet):
+    queryset = Notification.objects.select_related('recipient', 'organization')
+    serializer_class = NotificationSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['organization', 'notification_type', 'is_read']
+    ordering_fields = ['created_at', 'read_at']
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff and self.request.query_params.get('all') == 'true':
+            return self.queryset.all()
+        return self.queryset.filter(recipient=user)
+
+    def perform_create(self, serializer):
+        if not self.request.user.is_staff:
+            raise PermissionDenied("Only admins can create direct notifications.")
+        serializer.save()
+
+    def perform_update(self, serializer):
+        notification = self.get_object()
+        if notification.recipient != self.request.user and not self.request.user.is_staff:
+            raise PermissionDenied("You can only update your own notifications.")
+        serializer.save(read_at=timezone.now() if serializer.validated_data.get('is_read') else notification.read_at)
+
+    def perform_destroy(self, instance):
+        if instance.recipient != self.request.user and not self.request.user.is_staff:
+            raise PermissionDenied("You can only delete your own notifications.")
+        instance.delete()
+
+    @action(detail=True, methods=['post'])
+    def mark_read(self, request, pk=None):
+        notification = self.get_object()
+        notification.is_read = True
+        notification.read_at = timezone.now()
+        notification.save(update_fields=['is_read', 'read_at'])
+        return Response(NotificationSerializer(notification).data)
+
+    @action(detail=True, methods=['post'])
+    def mark_unread(self, request, pk=None):
+        notification = self.get_object()
+        notification.is_read = False
+        notification.read_at = None
+        notification.save(update_fields=['is_read', 'read_at'])
+        return Response(NotificationSerializer(notification).data)
+
+    @action(detail=False, methods=['post'])
+    def mark_all_read(self, request):
+        updated = self.get_queryset().filter(is_read=False).update(is_read=True, read_at=timezone.now())
+        return Response({'updated': updated})
 
 # --- Budget ViewSets ---
 
@@ -781,6 +1027,216 @@ class BudgetViewSet(viewsets.ModelViewSet):
         }
         
         return Response(BudgetSummarySerializer(data).data)
+
+# --- Dues & Payment ViewSets ---
+
+class FeeViewSet(viewsets.ModelViewSet):
+    queryset = Fee.objects.select_related('organization', 'event', 'created_by').prefetch_related('assignments')
+    serializer_class = FeeSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ['organization', 'event', 'fee_type', 'status']
+    search_fields = ['title', 'description']
+    ordering_fields = ['due_date', 'created_at', 'amount']
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return self.queryset.all()
+
+        member_orgs = Membership.objects.filter(user=user, is_active=True).values_list('organization_id', flat=True)
+        return self.queryset.filter(organization_id__in=member_orgs)
+
+    def perform_create(self, serializer):
+        org = serializer.validated_data['organization']
+        if not is_org_officer_or_leader(self.request.user, org):
+            raise PermissionDenied("Only officers can create fees.")
+        serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        fee = self.get_object()
+        if not self.request.user.is_staff and not is_org_officer_or_leader(self.request.user, fee.organization):
+            raise PermissionDenied("Only officers can update fees.")
+        if 'organization' in serializer.validated_data:
+            raise ValidationError("Fee organization cannot be changed.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if not self.request.user.is_staff and not is_org_officer_or_leader(self.request.user, instance.organization):
+            raise PermissionDenied("Only officers can delete fees.")
+        instance.delete()
+
+    @action(detail=True, methods=['post'])
+    def assign_members(self, request, pk=None):
+        fee = self.get_object()
+        if not is_org_officer_or_leader(request.user, fee.organization):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        user_ids = request.data.get('user_ids')
+        memberships = Membership.objects.filter(organization=fee.organization, is_active=True).select_related('user')
+        if user_ids:
+            memberships = memberships.filter(user_id__in=user_ids)
+
+        created = 0
+        assignments = []
+        for membership in memberships:
+            assignment, was_created = FeeAssignment.objects.get_or_create(
+                fee=fee,
+                user=membership.user,
+                defaults={
+                    'amount_due': fee.amount,
+                    'due_date': fee.due_date,
+                }
+            )
+            assignments.append(assignment)
+            if was_created:
+                created += 1
+
+        notify_users(
+            [assignment.user for assignment in assignments],
+            f"New fee assigned: {fee.title}",
+            f"Amount due: {fee.amount}",
+            notification_type='payment',
+            organization=fee.organization,
+            link=f"/fees/{fee.id}",
+        )
+        return Response({
+            'created': created,
+            'total_assignments': len(assignments),
+            'assignments': FeeAssignmentSerializer(assignments, many=True).data,
+        })
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        org_id = request.query_params.get('organization')
+        if not org_id:
+            return Response({'error': 'organization parameter required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            org = Organization.objects.get(id=org_id)
+        except Organization.DoesNotExist:
+            return Response({'error': 'Organization not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        if not request.user.is_staff and not is_org_officer_or_leader(request.user, org):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+        assignments = FeeAssignment.objects.filter(fee__organization=org)
+        total_due = assignments.aggregate(total=Sum('amount_due'))['total'] or 0
+        total_paid = assignments.aggregate(total=Sum('amount_paid'))['total'] or 0
+        data = {
+            'total_due': total_due,
+            'total_paid': total_paid,
+            'outstanding_balance': total_due - total_paid,
+            'unpaid_count': assignments.filter(status='unpaid').count(),
+            'partial_count': assignments.filter(status='partial').count(),
+            'paid_count': assignments.filter(status='paid').count(),
+            'waived_count': assignments.filter(status='waived').count(),
+        }
+        return Response(PaymentSummarySerializer(data).data)
+
+
+class FeeAssignmentViewSet(viewsets.ModelViewSet):
+    queryset = FeeAssignment.objects.select_related('fee', 'fee__organization', 'fee__event', 'user')
+    serializer_class = FeeAssignmentSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['fee', 'user', 'status']
+    ordering_fields = ['due_date', 'assigned_at', 'amount_due', 'amount_paid']
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return self.queryset.all()
+
+        officer_orgs = user_officer_org_ids(user)
+        return self.queryset.filter(
+            Q(fee__organization_id__in=officer_orgs) | Q(user=user)
+        )
+
+    def perform_create(self, serializer):
+        fee = serializer.validated_data['fee']
+        if not is_org_officer_or_leader(self.request.user, fee.organization):
+            raise PermissionDenied("Only officers can assign fees.")
+        serializer.save(
+            amount_due=serializer.validated_data.get('amount_due') or fee.amount,
+            due_date=serializer.validated_data.get('due_date') or fee.due_date,
+        )
+
+    def perform_update(self, serializer):
+        assignment = self.get_object()
+        if not self.request.user.is_staff and not is_org_officer_or_leader(self.request.user, assignment.fee.organization):
+            raise PermissionDenied("Only officers can update fee assignments.")
+        if 'fee' in serializer.validated_data or 'user' in serializer.validated_data:
+            raise ValidationError("Assignment fee and user cannot be changed.")
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        if not self.request.user.is_staff and not is_org_officer_or_leader(self.request.user, instance.fee.organization):
+            raise PermissionDenied("Only officers can delete fee assignments.")
+        instance.delete()
+
+    @action(detail=True, methods=['post'])
+    def waive(self, request, pk=None):
+        assignment = self.get_object()
+        if not is_org_officer_or_leader(request.user, assignment.fee.organization):
+            return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+        assignment.status = 'waived'
+        assignment.notes = request.data.get('notes', assignment.notes)
+        assignment.save(update_fields=['status', 'notes', 'updated_at'])
+        return Response(FeeAssignmentSerializer(assignment).data)
+
+
+class PaymentViewSet(viewsets.ModelViewSet):
+    queryset = Payment.objects.select_related(
+        'assignment', 'assignment__fee', 'assignment__fee__organization',
+        'assignment__user', 'received_by'
+    )
+    serializer_class = PaymentSerializer
+    permission_classes = [IsAuthenticated]
+    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filterset_fields = ['assignment', 'payment_method']
+    ordering_fields = ['paid_at', 'created_at', 'amount']
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.is_staff:
+            return self.queryset.all()
+
+        officer_orgs = user_officer_org_ids(user)
+        return self.queryset.filter(
+            Q(assignment__fee__organization_id__in=officer_orgs) | Q(assignment__user=user)
+        )
+
+    def perform_create(self, serializer):
+        assignment = serializer.validated_data['assignment']
+        if not is_org_officer_or_leader(self.request.user, assignment.fee.organization):
+            raise PermissionDenied("Only officers can record payments.")
+        payment = serializer.save(received_by=self.request.user)
+        payment.assignment.refresh_payment_status()
+        notify_users(
+            [payment.assignment.user],
+            f"Payment recorded for {payment.assignment.fee.title}",
+            f"Amount paid: {payment.amount}",
+            notification_type='payment',
+            organization=payment.assignment.fee.organization,
+            link=f"/fee-assignments/{payment.assignment.id}",
+        )
+
+    def perform_update(self, serializer):
+        payment = self.get_object()
+        if not self.request.user.is_staff and not is_org_officer_or_leader(self.request.user, payment.assignment.fee.organization):
+            raise PermissionDenied("Only officers can update payments.")
+        if 'assignment' in serializer.validated_data:
+            raise ValidationError("Payment assignment cannot be changed.")
+        payment = serializer.save()
+        payment.assignment.refresh_payment_status()
+
+    def perform_destroy(self, instance):
+        if not self.request.user.is_staff and not is_org_officer_or_leader(self.request.user, instance.assignment.fee.organization):
+            raise PermissionDenied("Only officers can delete payments.")
+        assignment = instance.assignment
+        instance.delete()
+        assignment.refresh_payment_status()
 
 # --- Document ViewSets ---
 
@@ -884,5 +1340,47 @@ def officer_dashboard_stats(request, org_id):
         'total_budget_expense': expense,
         'budget_balance': income - expense,
         'document_count': Document.objects.filter(organization=org).count(),
+        'unpaid_fee_assignments': FeeAssignment.objects.filter(fee__organization=org, status__in=['unpaid', 'partial']).count(),
+        'unread_notifications': Notification.objects.filter(recipient=request.user, is_read=False).count(),
     }
     return Response(OfficerDashboardStatsSerializer(data).data)
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def organization_report(request, org_id):
+    """Operational report for officers: membership, events, attendance, finances, and documents."""
+    try:
+        org = Organization.objects.get(id=org_id)
+    except Organization.DoesNotExist:
+        return Response({'error': 'Organization not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    if not request.user.is_staff and not is_org_officer_or_leader(request.user, org):
+        return Response({'error': 'Permission denied'}, status=status.HTTP_403_FORBIDDEN)
+
+    budgets = Budget.objects.filter(organization=org)
+    income = budgets.filter(transaction_type='income').aggregate(total=Sum('amount'))['total'] or 0
+    expense = budgets.filter(transaction_type='expense').aggregate(total=Sum('amount'))['total'] or 0
+
+    assignments = FeeAssignment.objects.filter(fee__organization=org)
+    total_due = assignments.aggregate(total=Sum('amount_due'))['total'] or 0
+    total_paid = assignments.aggregate(total=Sum('amount_paid'))['total'] or 0
+
+    data = {
+        'organization_id': org.id,
+        'organization_name': org.name,
+        'member_count': org.member_count,
+        'officer_count': org.officer_count,
+        'pending_requests': MembershipRequest.objects.filter(organization=org, status='pending').count(),
+        'total_events': Event.objects.filter(organization=org).count(),
+        'upcoming_events': Event.objects.filter(organization=org, start_time__gte=timezone.now()).count(),
+        'total_attendance': Attendance.objects.filter(event__organization=org).count(),
+        'total_registrations': EventRegistration.objects.filter(event__organization=org, status='registered').count(),
+        'total_budget_income': income,
+        'total_budget_expense': expense,
+        'budget_balance': income - expense,
+        'total_fees_due': total_due,
+        'total_fees_paid': total_paid,
+        'outstanding_fees': total_due - total_paid,
+        'document_count': Document.objects.filter(organization=org).count(),
+    }
+    return Response(OrganizationReportSerializer(data).data)

@@ -222,10 +222,46 @@ class Event(models.Model):
         return self.attendance_records.count()
 
     @property
+    def registration_count(self):
+        return self.registrations.filter(status='registered').count()
+
+    @property
+    def waitlist_count(self):
+        return self.registrations.filter(status='waitlisted').count()
+
+    @property
+    def is_registration_full(self):
+        if self.max_attendees:
+            return self.registration_count >= self.max_attendees
+        return False
+
+    @property
     def is_full(self):
         if self.max_attendees:
             return self.attendee_count >= self.max_attendees
         return False
+
+class EventRegistration(models.Model):
+    STATUS_CHOICES = [
+        ('registered', 'Registered'),
+        ('waitlisted', 'Waitlisted'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='registrations')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='event_registrations')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='registered')
+    notes = models.TextField(blank=True)
+    registered_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ('event', 'user')
+        ordering = ['-registered_at']
+
+    def __str__(self):
+        return f"{self.user.email} -> {self.event.title} ({self.status})"
 
 class Attendance(models.Model):
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name='attendance_records')
@@ -246,6 +282,110 @@ class Attendance(models.Model):
 
     def __str__(self):
         return f"{self.user.email} @ {self.event.title}"
+
+# --- Dues & Payment Tracking ---
+
+class Fee(models.Model):
+    FEE_TYPE_CHOICES = [
+        ('membership_due', 'Membership Due'),
+        ('event_fee', 'Event Fee'),
+        ('fundraising', 'Fundraising'),
+        ('other', 'Other'),
+    ]
+    STATUS_CHOICES = [
+        ('draft', 'Draft'),
+        ('open', 'Open'),
+        ('closed', 'Closed'),
+        ('cancelled', 'Cancelled'),
+    ]
+
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, related_name='fees')
+    event = models.ForeignKey(Event, on_delete=models.SET_NULL, null=True, blank=True, related_name='fees')
+    title = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    fee_type = models.CharField(max_length=30, choices=FEE_TYPE_CHOICES, default='membership_due')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    due_date = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='open')
+    created_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='created_fees')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-due_date', '-created_at']
+
+    def __str__(self):
+        return f"{self.organization.acronym} - {self.title}"
+
+class FeeAssignment(models.Model):
+    STATUS_CHOICES = [
+        ('unpaid', 'Unpaid'),
+        ('partial', 'Partial'),
+        ('paid', 'Paid'),
+        ('waived', 'Waived'),
+    ]
+
+    fee = models.ForeignKey(Fee, on_delete=models.CASCADE, related_name='assignments')
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='fee_assignments')
+    amount_due = models.DecimalField(max_digits=12, decimal_places=2)
+    amount_paid = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='unpaid')
+    due_date = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True)
+    assigned_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        unique_together = ('fee', 'user')
+        ordering = ['status', 'due_date', 'user__last_name']
+
+    def __str__(self):
+        return f"{self.user.email} - {self.fee.title} ({self.status})"
+
+    @property
+    def balance(self):
+        return max(self.amount_due - self.amount_paid, 0)
+
+    def refresh_payment_status(self):
+        total_paid = self.payments.aggregate(total=models.Sum('amount'))['total'] or 0
+        self.amount_paid = total_paid
+        if self.status != 'waived':
+            if total_paid <= 0:
+                self.status = 'unpaid'
+                self.paid_at = None
+            elif total_paid < self.amount_due:
+                self.status = 'partial'
+                self.paid_at = None
+            else:
+                self.status = 'paid'
+                self.paid_at = timezone.now()
+        self.save(update_fields=['amount_paid', 'status', 'paid_at', 'updated_at'])
+
+class Payment(models.Model):
+    PAYMENT_METHOD_CHOICES = [
+        ('cash', 'Cash'),
+        ('gcash', 'GCash'),
+        ('bank_transfer', 'Bank Transfer'),
+        ('card', 'Card'),
+        ('other', 'Other'),
+    ]
+
+    assignment = models.ForeignKey(FeeAssignment, on_delete=models.CASCADE, related_name='payments')
+    amount = models.DecimalField(max_digits=12, decimal_places=2)
+    payment_method = models.CharField(max_length=30, choices=PAYMENT_METHOD_CHOICES, default='cash')
+    reference_number = models.CharField(max_length=100, blank=True)
+    proof = models.FileField(upload_to='payment_proofs/', null=True, blank=True)
+    paid_at = models.DateTimeField(default=timezone.now)
+    received_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name='received_payments')
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-paid_at', '-created_at']
+
+    def __str__(self):
+        return f"{self.assignment.user.email} paid {self.amount} for {self.assignment.fee.title}"
 
 # --- Announcement Management ---
 
@@ -271,6 +411,33 @@ class Announcement(models.Model):
     def __str__(self):
         org_name = self.organization.acronym if self.organization else "SYSTEM"
         return f"[{org_name}] {self.title}"
+
+# --- Notification Management ---
+
+class Notification(models.Model):
+    TYPE_CHOICES = [
+        ('announcement', 'Announcement'),
+        ('membership', 'Membership'),
+        ('event', 'Event'),
+        ('payment', 'Payment'),
+        ('system', 'System'),
+    ]
+
+    recipient = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='notifications')
+    organization = models.ForeignKey(Organization, on_delete=models.CASCADE, null=True, blank=True, related_name='notifications')
+    notification_type = models.CharField(max_length=30, choices=TYPE_CHOICES, default='system')
+    title = models.CharField(max_length=200)
+    message = models.TextField(blank=True)
+    link = models.CharField(max_length=255, blank=True)
+    is_read = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    read_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.recipient.email} - {self.title}"
 
 # --- Budget Management ---
 
